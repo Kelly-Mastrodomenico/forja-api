@@ -12,7 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'forja_db');
 define('DB_USER', 'root');
-define('DB_PASS', ''); // Vacío en XAMPP por defecto
+define('DB_PASS', '');
 
 function conectarDB() {
     try {
@@ -31,15 +31,21 @@ function conectarDB() {
     }
 }
 
-// Genera un token simple para la sesión del usuario
 function generarToken($usuario_id) {
     return bin2hex(random_bytes(32)) . '_' . $usuario_id . '_' . time();
 }
 
-// Valida el token recibido en cabecera Authorization
 function validarToken($pdo) {
     $headers = getallheaders();
-    $auth = isset($headers['Authorization']) ? $headers['Authorization'] : '';
+
+    $auth = '';
+    if (isset($headers['Authorization'])) {
+        $auth = $headers['Authorization'];
+    } elseif (isset($headers['authorization'])) {
+        $auth = $headers['authorization'];
+    } elseif (isset($_SERVER['HTTP_AUTHORIZATION'])) {
+        $auth = $_SERVER['HTTP_AUTHORIZATION'];
+    }
 
     if (empty($auth) || !str_starts_with($auth, 'Bearer ')) {
         http_response_code(401);

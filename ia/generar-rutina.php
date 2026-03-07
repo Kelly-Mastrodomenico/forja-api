@@ -2,6 +2,12 @@
 require_once '../config/database.php';
 require_once '../config/ia.php';
 
+// Debug temporal
+$headers = getallheaders();
+error_log("Headers recibidos: " . json_encode($headers));
+$auth = isset($headers['Authorization']) ? $headers['Authorization'] : 'NO ENCONTRADO';
+error_log("Authorization: " . $auth);
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(["error" => "Método no permitido"]);
