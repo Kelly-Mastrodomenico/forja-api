@@ -2,12 +2,6 @@
 require_once '../config/database.php';
 require_once '../config/ia.php';
 
-// Debug temporal
-$headers = getallheaders();
-error_log("Headers recibidos: " . json_encode($headers));
-$auth = isset($headers['Authorization']) ? $headers['Authorization'] : 'NO ENCONTRADO';
-error_log("Authorization: " . $auth);
-
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(["error" => "Método no permitido"]);
@@ -16,21 +10,16 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $pdo = conectarDB();
 $usuario = validarToken($pdo);
-
 $datos = json_decode(file_get_contents("php://input"), true);
-
-$tipoRutina = isset($datos['tipo']) ? $datos['tipo'] : 'semanal';
-$tiposValidos = ['diaria', 'semanal', 'mensual'];
-if (!in_array($tipoRutina, $tiposValidos)) {
-    http_response_code(400);
-    echo json_encode(["error" => "Tipo de rutina no válido"]);
-    exit();
-}
+$tipo = isset($datos['tipo']) ? $datos['tipo'] : 'semanal';
 
 try {
-    // Traer datos completos del usuario
+    // Obtener perfil completo
     $stmt = $pdo->prepare("
-        SELECT u.*, GROUP_CONCAT(p.patologia) as patologias
+        SELECT u.nombre, u.sexo, u.fecha_nacimiento, u.altura_cm,
+               u.peso_actual, u.peso_objetivo, u.grasa_objetivo,
+               u.objetivo, u.dias_entrenamiento, u.nivel,
+               u.tiene_ciclo, GROUP_CONCAT(p.patologia) as condiciones
         FROM usuarios u
         LEFT JOIN usuario_patologias p ON p.usuario_id = u.id
         WHERE u.id = :id
@@ -38,124 +27,127 @@ try {
     ");
     $stmt->bindValue(':id', $usuario['id']);
     $stmt->execute();
-    $datosUsuario = $stmt->fetch();
-
-    // Traer última medida
-    $stmtMedida = $pdo->prepare("
-        SELECT * FROM medidas
-        WHERE usuario_id = :id
-        ORDER BY fecha DESC
-        LIMIT 1
-    ");
-    $stmtMedida->bindValue(':id', $usuario['id']);
-    $stmtMedida->execute();
-    $ultimaMedida = $stmtMedida->fetch();
+    $perfil = $stmt->fetch();
 
     // Calcular edad
-    $fechaNac = new DateTime($datosUsuario['fecha_nacimiento']);
-    $hoy = new DateTime();
-    $edad = $fechaNac->diff($hoy)->y;
+    $edad = date_diff(date_create($perfil['fecha_nacimiento']), date_create('today'))->y;
 
-    // Alimentos favoritos del usuario
-    $stmtAlimentos = $pdo->prepare("
-        SELECT nombre, marca FROM alimentos
-        WHERE usuario_id = :id
-        ORDER BY id DESC LIMIT 20
-    ");
-    $stmtAlimentos->bindValue(':id', $usuario['id']);
-    $stmtAlimentos->execute();
-    $alimentos = $stmtAlimentos->fetchAll();
-    $listadoAlimentos = implode(', ', array_map(fn($a) => $a['nombre'] . ($a['marca'] ? " ({$a['marca']})" : ''), $alimentos));
+    $condiciones = $perfil['condiciones'] && $perfil['condiciones'] !== 'ninguna'
+        ? $perfil['condiciones']
+        : 'ninguna';
 
-    // Construir el prompt
-    $objetivo = str_replace('_', ' ', $datosUsuario['objetivo']);
-    $patologias = $datosUsuario['patologias'] ?? 'ninguna';
-    $tieneCiclo = $datosUsuario['tiene_ciclo'] ? 'Sí' : 'No';
+    $pesoObjetivo = $perfil['peso_objetivo'] ? "Peso objetivo: {$perfil['peso_objetivo']} kg." : '';
+    $grasaObjetivo = $perfil['grasa_objetivo'] ? "Grasa corporal objetivo: {$perfil['grasa_objetivo']}%." : '';
 
-    $medidas = '';
-    if ($ultimaMedida) {
-        $medidas = "
-MEDIDAS CORPORALES ACTUALES:
-- Peso: {$ultimaMedida['peso_kg']} kg
-- Grasa corporal: {$ultimaMedida['grasa_corporal']}%
-- Masa muscular: {$ultimaMedida['masa_muscular']} kg
-- IMC: {$ultimaMedida['imc']}
-- Cintura: {$ultimaMedida['cintura_cm']} cm
-- Cadera: {$ultimaMedida['cadera_cm']} cm";
+$prompt = "Actúa como un Sistema de Inteligencia Artificial de Grado Clínico especializado en Nutrición Deportiva y Ciencias del Ejercicio (basado en estándares ISSN, ACSM y NSCA).
+
+Tu objetivo es generar una planificación de entrenamiento para:
+- Usuario: {$perfil['nombre']} ({$perfil['sexo']}, {$edad} años)
+- Antropometría: {$perfil['altura_cm']} cm, {$perfil['peso_actual']} kg
+- Objetivo: {$perfil['objetivo']}. {$pesoObjetivo} {$grasaObjetivo}
+- Disponibilidad: {$perfil['dias_entrenamiento']} días/semana. Nivel: {$perfil['nivel']}
+- Condiciones de salud: {$condiciones}
+- Ciclo menstrual activo: " . ($perfil['tiene_ciclo'] ? 'Sí' : 'No') . "
+
+REGLAS DE SEGURIDAD BIOMECÁNICA (OBLIGATORIO):
+- dolor_lumbar: priorizar estabilización de core, evitar cargas axiales extremas. Sustituir sentadilla con barra por Goblet Squat o prensa.
+- dolor_rodilla: limitar rango de movimiento, priorizar cadena posterior, evitar extensiones de rodilla con carga alta.
+- lesion_hombro: evitar press por encima de la cabeza, sustituir por variantes neutras o de empuje horizontal.
+- tendinitis: reducir volumen en ejercicios de la zona afectada, priorizar trabajo excéntrico.
+- Si tiene ciclo menstrual activo y es fase lútea probable (días 15-28): reducir RPE objetivo en 1-2 puntos.
+
+Responde ÚNICAMENTE con JSON puro válido, sin texto antes ni después, sin markdown:
+
+// Dentro de $prompt, reemplaza el ejemplo de ejercicio por este:
+{
+  \"rutina\": [
+    {
+      \"dia\": 1,
+      \"nombre\": \"Pecho y Tríceps\",
+      \"grupo_muscular\": \"pecho, triceps\",
+      \"justificacion_clinica\": \"Nota breve sobre ajustes\",
+      \"ejercicios\": [
+        {
+          \"nombre_espanol\": \"Press de banca\",
+          \"nombre_ingles\": \"barbell bench press\",
+          \"series\": 4,
+          \"repeticiones\": \"8-10\",
+          \"rir\": 2,
+          \"descanso\": \"90s\",
+          \"sustituto_lesion\": \"Press en máquina si hay dolor de hombro\",
+          \"tecnica_clave\": \"Tempo 3-0-2, escápulas retraídas\"
+        }
+      ]
     }
+  ]
+}
 
-    $alimentosTexto = $listadoAlimentos ? "ALIMENTOS HABITUALES DEL USUARIO: $listadoAlimentos" : '';
+Genera exactamente {$perfil['dias_entrenamiento']} días. Cada día entre 4 y 6 ejercicios. Solo JSON puro.";
 
-    $prompt = "
-Actúa como un médico especialista en nutrición deportiva, recomposición corporal e hipertrofia y preparador físico profesional, usando exclusivamente evidencia científica actual (ISSN, ACSM, NSCA).
+    $apiKey = obtenerApiKey();
+    $url = "https://api.groq.com/openai/v1/chat/completions";
 
-No quiero explicaciones teóricas largas. Quiero decisiones prácticas, estructuradas y justificadas brevemente.
+    $datosPeticion = [
+        "model" => "llama-3.3-70b-versatile",
+        "messages" => [
+            ["role" => "system", "content" => "Eres un entrenador experto. Respondes ÚNICAMENTE con JSON válido, sin texto adicional, sin markdown, sin explicaciones."],
+            ["role" => "user", "content" => $prompt]
+        ],
+        "temperature" => 0.7,
+        "max_tokens" => 3000
+    ];
 
-DATOS PERSONALES:
-- Nombre: {$datosUsuario['nombre']}
-- Sexo: {$datosUsuario['sexo']}
-- Edad: {$edad} años
-- Altura: {$datosUsuario['altura_cm']} cm
-- Nivel: {$datosUsuario['nivel']}
-- Días de entrenamiento: {$datosUsuario['dias_entrenamiento']} días por semana
-- Objetivo: {$objetivo}
-- Patologías: {$patologias}
-- Tiene ciclo menstrual: {$tieneCiclo}
-{$medidas}
-{$alimentosTexto}
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($datosPeticion));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $apiKey
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 
-Genera un plan {$tipoRutina} completo con este formato exacto:
+    $resultado = curl_exec($ch);
+    $errorCurl = curl_error($ch);
+    curl_close($ch);
 
-## PLAN NUTRICIONAL
-- Calorías totales y macros (proteínas/carbohidratos/grasas en gramos)
-- Plan de comidas con cantidades exactas en gramos
-- Timing nutricional (cuándo comer respecto al entreno)
-
-## PLAN DE ENTRENAMIENTO
-- Rutina completa para {$datosUsuario['dias_entrenamiento']} días
-- Por cada ejercicio: series, repeticiones, RIR, descanso
-- Orden de ejercicios por día
-
-## PLAN DE CARDIO
-- Tipo, duración e intensidad
-
-## PROGRESIÓN
-- Cómo progresar semana a semana
-
-## INDICACIONES PRÁCTICAS
-- 3 puntos clave para este usuario específico
-
-Al final pídeme que te envíe: peso actualizado, medidas, rendimiento y sensaciones para continuar el seguimiento.
-";
-
-    $resultado = llamarIA($prompt);
-
-    if (isset($resultado['error'])) {
+    if ($errorCurl) {
         http_response_code(500);
-        echo json_encode(["error" => $resultado['error']]);
+        echo json_encode(["error" => "Error de conexión: " . $errorCurl]);
         exit();
     }
 
-    // Guardar la rutina en la base de datos
-    $stmtGuardar = $pdo->prepare("
-        INSERT INTO rutinas (usuario_id, tipo, contenido_json, prompt_usado)
-        VALUES (:uid, :tipo, :contenido, :prompt)
-    ");
-    $stmtGuardar->bindValue(':uid', $usuario['id']);
-    $stmtGuardar->bindValue(':tipo', $tipoRutina);
-    $stmtGuardar->bindValue(':contenido', json_encode(['texto' => $resultado['respuesta']]));
-    $stmtGuardar->bindValue(':prompt', $prompt);
-    $stmtGuardar->execute();
+    $respuesta = json_decode($resultado, true);
+    $textoIA = $respuesta['choices'][0]['message']['content'] ?? '';
 
-    $rutinaId = $pdo->lastInsertId();
+    // Extraer JSON de forma más robusta
+    $inicioPos = strpos($textoIA, '{');
+    $finPos = strrpos($textoIA, '}');
+    if ($inicioPos !== false && $finPos !== false) {
+        $textoLimpio = substr($textoIA, $inicioPos, $finPos - $inicioPos + 1);
+    } else {
+        $textoLimpio = $textoIA;
+    }
+
+    $rutinaJSON = json_decode($textoLimpio, true);
+
+    if (!$rutinaJSON || !isset($rutinaJSON['rutina'])) {
+        http_response_code(500);
+        echo json_encode(["error" => "La IA no devolvió el formato esperado", "raw" => $textoIA]);
+        exit();
+    }
 
     echo json_encode([
-        "rutina_id" => $rutinaId,
-        "tipo" => $tipoRutina,
-        "contenido" => $resultado['respuesta']
+        "rutina" => $rutinaJSON['rutina'],
+        "perfil_usado" => [
+            "objetivo" => $perfil['objetivo'],
+            "nivel" => $perfil['nivel'],
+            "condiciones" => $condiciones
+        ]
     ], JSON_UNESCAPED_UNICODE);
 
-} catch (PDOException $e) {
+} catch (Exception $e) {
     http_response_code(500);
-    echo json_encode(["error" => "Error de base de datos: " . $e->getMessage()]);
+    echo json_encode(["error" => $e->getMessage()]);
 }

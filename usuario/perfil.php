@@ -49,24 +49,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     try {
         $stmt = $pdo->prepare("
-            UPDATE usuarios SET
-                nombre = :nombre,
-                altura_cm = :altura,
-                objetivo = :objetivo,
-                dias_entrenamiento = :dias,
-                nivel = :nivel,
-                tiene_ciclo = :ciclo,
-                duracion_ciclo = :duracion_ciclo
-            WHERE id = :id
-        ");
-        $stmt->bindValue(':nombre', trim($datos['nombre']));
-        $stmt->bindValue(':altura', (float)$datos['altura_cm']);
-        $stmt->bindValue(':objetivo', $datos['objetivo']);
-        $stmt->bindValue(':dias', (int)$datos['dias_entrenamiento']);
-        $stmt->bindValue(':nivel', $datos['nivel']);
-        $stmt->bindValue(':ciclo', isset($datos['tiene_ciclo']) ? (bool)$datos['tiene_ciclo'] : false, PDO::PARAM_BOOL);
-        $stmt->bindValue(':duracion_ciclo', isset($datos['duracion_ciclo']) ? (int)$datos['duracion_ciclo'] : 28);
-        $stmt->bindValue(':id', $usuario['id']);
+    UPDATE usuarios SET
+        nombre = :nombre,
+        altura_cm = :altura,
+        peso_objetivo = :peso_objetivo,
+        grasa_objetivo = :grasa_objetivo,
+        objetivo = :objetivo,
+        dias_entrenamiento = :dias,
+        nivel = :nivel,
+        tiene_ciclo = :ciclo,
+        duracion_ciclo = :duracion_ciclo
+    WHERE id = :id
+");
+$stmt->bindValue(':nombre', trim($datos['nombre']));
+$stmt->bindValue(':altura', (float)$datos['altura_cm']);
+$stmt->bindValue(':peso_objetivo', isset($datos['peso_objetivo']) ? (float)$datos['peso_objetivo'] : null);
+$stmt->bindValue(':grasa_objetivo', isset($datos['grasa_objetivo']) ? (float)$datos['grasa_objetivo'] : null);
+$stmt->bindValue(':objetivo', $datos['objetivo']);
+$stmt->bindValue(':dias', (int)$datos['dias_entrenamiento']);
+$stmt->bindValue(':nivel', $datos['nivel']);
+$stmt->bindValue(':ciclo', isset($datos['tiene_ciclo']) ? (bool)$datos['tiene_ciclo'] : false, PDO::PARAM_BOOL);
+$stmt->bindValue(':duracion_ciclo', isset($datos['duracion_ciclo']) ? (int)$datos['duracion_ciclo'] : 28);
+$stmt->bindValue(':id', $usuario['id']);
         $stmt->execute();
 
         // Actualizar patologías
@@ -74,7 +78,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare("DELETE FROM usuario_patologias WHERE usuario_id = :id")
                 ->execute([':id' => $usuario['id']]);
 
-            $patologiasValidas = ['sop','hipotiroidismo','resistencia_insulina','endometriosis','diabetes_tipo2','ninguna'];
+            $patologiasValidas = [
+    'sop', 'hipotiroidismo', 'resistencia_insulina',
+    'endometriosis', 'diabetes_tipo2', 'ninguna',
+    'dolor_rodilla', 'dolor_lumbar', 'lesion_hombro', 'tendinitis'
+];
             $stmtPat = $pdo->prepare("INSERT INTO usuario_patologias (usuario_id, patologia) VALUES (:uid, :pat)");
             foreach ($datos['patologias'] as $pat) {
                 if (in_array($pat, $patologiasValidas)) {
