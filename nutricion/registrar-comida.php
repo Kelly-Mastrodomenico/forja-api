@@ -1,86 +1,65 @@
 <?php
 require_once '../config/database.php';
 
+$pdo     = conectarDB();
+$usuario = validarToken($pdo);
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(["error" => "Método no permitido"]);
     exit();
 }
 
-$pdo = conectarDB();
-$usuario = validarToken($pdo);
 $datos = json_decode(file_get_contents("php://input"), true);
 
-$camposRequeridos = ['nombre', 'cantidad_gramos', 'momento'];
-foreach ($camposRequeridos as $campo) {
-    if (!isset($datos[$campo]) || $datos[$campo] === '') {
-        http_response_code(400);
-        echo json_encode(["error" => "El campo '$campo' es obligatorio"]);
-        exit();
-    }
-}
+$momentosValidos = ['desayuno','media_manana','almuerzo','merienda','pre_entreno','post_entreno','cena'];
 
-$momentosValidos = ['desayuno','media_manana','almuerzo','merienda','cena','pre_entreno','post_entreno'];
-if (!in_array($datos['momento'], $momentosValidos)) {
+if (!isset($datos['alimento_id']) || !isset($datos['cantidad_gramos']) || !isset($datos['momento'])) {
     http_response_code(400);
-    echo json_encode(["error" => "Momento no válido"]);
+    echo json_encode(["error" => "Faltan campos requeridos: alimento_id, cantidad_gramos, momento"]);
     exit();
 }
 
-try {
-    // Buscar si el alimento ya existe para este usuario
-    $stmt = $pdo->prepare("
-        SELECT id FROM alimentos
-        WHERE nombre = :nombre AND (usuario_id = :uid OR usuario_id IS NULL)
-        LIMIT 1
-    ");
-    $stmt->bindValue(':nombre', trim($datos['nombre']));
-    $stmt->bindValue(':uid', $usuario['id']);
-    $stmt->execute();
-    $alimentoExistente = $stmt->fetch();
+if (!in_array($datos['momento'], $momentosValidos)) {
+    http_response_code(400);
+    echo json_encode(["error" => "Momento inválido"]);
+    exit();
+}
 
-    if ($alimentoExistente) {
-        $alimentoId = $alimentoExistente['id'];
-    } else {
-        // Crear el alimento nuevo
-        $stmtInsert = $pdo->prepare("
-            INSERT INTO alimentos
-                (usuario_id, nombre, marca, calorias_100g, proteinas_100g,
-                 carbohidratos_100g, grasas_100g, fibra_100g, es_escaneado)
-            VALUES
-                (:uid, :nombre, :marca, :calorias, :proteinas,
-                 :carbohidratos, :grasas, :fibra, :escaneado)
-        ");
-        $stmtInsert->bindValue(':uid', $usuario['id']);
-        $stmtInsert->bindValue(':nombre', trim($datos['nombre']));
-        $stmtInsert->bindValue(':marca', isset($datos['marca']) ? $datos['marca'] : null);
-        $stmtInsert->bindValue(':calorias', isset($datos['calorias_100g']) ? (float)$datos['calorias_100g'] : null);
-        $stmtInsert->bindValue(':proteinas', isset($datos['proteinas_100g']) ? (float)$datos['proteinas_100g'] : null);
-        $stmtInsert->bindValue(':carbohidratos', isset($datos['carbohidratos_100g']) ? (float)$datos['carbohidratos_100g'] : null);
-        $stmtInsert->bindValue(':grasas', isset($datos['grasas_100g']) ? (float)$datos['grasas_100g'] : null);
-        $stmtInsert->bindValue(':fibra', isset($datos['fibra_100g']) ? (float)$datos['fibra_100g'] : null);
-        $stmtInsert->bindValue(':escaneado', isset($datos['es_escaneado']) ? 1 : 0);
-        $stmtInsert->execute();
-        $alimentoId = $pdo->lastInsertId();
+$cantidad = (float)$datos['cantidad_gramos'];
+if ($cantidad <= 0 || $cantidad > 5000) {
+    http_response_code(400);
+    echo json_encode(["error" => "Cantidad inválida (debe ser entre 1 y 5000 gramos)"]);
+    exit();
+}
+
+$fecha = isset($datos['fecha']) ? $datos['fecha'] : date('Y-m-d');
+
+try {
+    // Verificar que el alimento existe
+    $stmtCheck = $pdo->prepare("SELECT id FROM alimentos WHERE id = :id");
+    $stmtCheck->bindValue(':id', (int)$datos['alimento_id']);
+    $stmtCheck->execute();
+    if (!$stmtCheck->fetch()) {
+        http_response_code(404);
+        echo json_encode(["error" => "Alimento no encontrado"]);
+        exit();
     }
 
-    // Registrar la comida del día
-    $fecha = isset($datos['fecha']) ? $datos['fecha'] : date('Y-m-d');
-    $stmtComida = $pdo->prepare("
-        INSERT INTO registro_comidas (usuario_id, alimento_id, fecha, momento, cantidad_gramos)
-        VALUES (:uid, :alimento_id, :fecha, :momento, :cantidad)
+    $stmt = $pdo->prepare("
+        INSERT INTO registro_comidas (usuario_id, alimento_id, cantidad_gramos, momento, fecha)
+        VALUES (:uid, :alimento_id, :cantidad, :momento, :fecha)
     ");
-    $stmtComida->bindValue(':uid', $usuario['id']);
-    $stmtComida->bindValue(':alimento_id', $alimentoId);
-    $stmtComida->bindValue(':fecha', $fecha);
-    $stmtComida->bindValue(':momento', $datos['momento']);
-    $stmtComida->bindValue(':cantidad', (float)$datos['cantidad_gramos']);
-    $stmtComida->execute();
+    $stmt->bindValue(':uid',        $usuario['id']);
+    $stmt->bindValue(':alimento_id',(int)$datos['alimento_id']);
+    $stmt->bindValue(':cantidad',   $cantidad);
+    $stmt->bindValue(':momento',    $datos['momento']);
+    $stmt->bindValue(':fecha',      $fecha);
+    $stmt->execute();
 
     echo json_encode([
         "mensaje" => "Comida registrada correctamente",
-        "alimento_id" => $alimentoId,
-        "fecha" => $fecha
+        "id"      => $pdo->lastInsertId()
     ], JSON_UNESCAPED_UNICODE);
 
 } catch (PDOException $e) {
