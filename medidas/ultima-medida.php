@@ -10,11 +10,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     exit();
 }
 
-// Parámetro opcional: límite de registros (por defecto 30)
-$limite = isset($_GET['limite']) && is_numeric($_GET['limite'])
-    ? min((int)$_GET['limite'], 100)
-    : 30;
-
 try {
     $stmt = $pdo->prepare("
         SELECT id, fecha, peso_kg, grasa_corporal, masa_muscular, masa_esqueletica,
@@ -23,21 +18,22 @@ try {
                bicep_der_cm, bicep_izq_cm,
                cuadriceps_der_cm, cuadriceps_izq_cm,
                pantorrilla_der_cm, pantorrilla_izq_cm,
-               fuente, notas, created_at
+               fuente, notas
         FROM medidas
         WHERE usuario_id = :uid
-        ORDER BY fecha ASC, created_at ASC
-        LIMIT :limite
+        ORDER BY fecha DESC, created_at DESC
+        LIMIT 1
     ");
-    $stmt->bindValue(':uid',    $usuario['id'], PDO::PARAM_INT);
-    $stmt->bindValue(':limite', $limite,        PDO::PARAM_INT);
+    $stmt->bindValue(':uid', $usuario['id']);
     $stmt->execute();
-    $medidas = $stmt->fetchAll();
+    $medida = $stmt->fetch();
 
-    echo json_encode([
-        "medidas" => $medidas,
-        "total"   => count($medidas),
-    ], JSON_UNESCAPED_UNICODE);
+    if (!$medida) {
+        echo json_encode(null);
+        exit();
+    }
+
+    echo json_encode($medida, JSON_UNESCAPED_UNICODE);
 
 } catch (PDOException $e) {
     http_response_code(500);
